@@ -2,7 +2,7 @@ name: Test Cairo_jll with dependents
 
 on:
   push:
-    branches: [master]
+    branches: [main]
 
 jobs:
   build-cairo-jll:
