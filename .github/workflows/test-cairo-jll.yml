@@ -1,0 +1,185 @@
+name: Test Cairo_jll with dependents
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  build-cairo-jll:
+    name: Build Cairo_jll
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      BINARYBUILDER_RUNNER: privileged
+      BINARYBUILDER_USE_SQUASHFS: "true"
+      BINARYBUILDER_AUTOMATIC_APPLE: "true"
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: true
+          large-packages: false
+
+      - name: Remove /opt
+        run: sudo rm -rf /opt/*
+
+      - name: Checkout Yggdrasil PR branch
+        uses: actions/checkout@v4
+        with:
+          repository: jkrumbiegel/Yggdrasil
+          ref: jk/cairo-remove-lzo
+          path: yggdrasil
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.10"
+
+      - name: Install BinaryBuilder
+        run: julia -e 'using Pkg; Pkg.add("BinaryBuilder")'
+
+      - name: Build Cairo_jll for x86_64-linux-gnu
+        run: |
+          cd yggdrasil/C/Cairo
+          julia --color=yes build_tarballs.jl --verbose --deploy=local x86_64-linux-gnu
+
+      - name: Package artifacts for upload
+        run: |
+          mkdir -p cairo-jll-artifact
+          cp -r ~/.julia/dev/Cairo_jll cairo-jll-artifact/Cairo_jll
+          cp -r yggdrasil/C/Cairo/products cairo-jll-artifact/products
+
+      - name: Upload Cairo_jll
+        uses: actions/upload-artifact@v4
+        with:
+          name: cairo-jll-local
+          path: cairo-jll-artifact/
+          retention-days: 7
+
+  test-cairo-jl:
+    name: Test Cairo.jl
+    needs: build-cairo-jll
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+
+      - name: Download Cairo_jll artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cairo-jll-local
+          path: cairo-jll-artifact
+
+      - name: Fix artifact paths
+        run: |
+          PRODUCTS_PATH="${GITHUB_WORKSPACE}/cairo-jll-artifact/products"
+          sed -i "s|file://[^ \"]*products|file://${PRODUCTS_PATH}|g" \
+            cairo-jll-artifact/Cairo_jll/Artifacts.toml
+          cat cairo-jll-artifact/Cairo_jll/Artifacts.toml
+
+      - name: Clone Cairo.jl
+        uses: actions/checkout@v4
+        with:
+          repository: JuliaGraphics/Cairo.jl
+          ref: master
+          path: Cairo.jl
+
+      - name: Run tests
+        run: |
+          cd Cairo.jl
+          julia --color=yes --project=. -e '
+            using Pkg
+            Pkg.develop(path=joinpath(ENV["GITHUB_WORKSPACE"], "cairo-jll-artifact", "Cairo_jll"))
+            Pkg.instantiate()
+            Pkg.status()
+            Pkg.test()
+          '
+
+  test-cairomakie:
+    name: Test CairoMakie.jl
+    needs: build-cairo-jll
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+
+      - name: Download Cairo_jll artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cairo-jll-local
+          path: cairo-jll-artifact
+
+      - name: Fix artifact paths
+        run: |
+          PRODUCTS_PATH="${GITHUB_WORKSPACE}/cairo-jll-artifact/products"
+          sed -i "s|file://[^ \"]*products|file://${PRODUCTS_PATH}|g" \
+            cairo-jll-artifact/Cairo_jll/Artifacts.toml
+          cat cairo-jll-artifact/Cairo_jll/Artifacts.toml
+
+      - name: Clone Makie.jl monorepo
+        uses: actions/checkout@v4
+        with:
+          repository: MakieOrg/Makie.jl
+          ref: master
+          path: Makie.jl
+
+      - name: Run CairoMakie tests
+        run: |
+          cd Makie.jl/CairoMakie
+          julia --color=yes --project=. -e '
+            using Pkg
+            Pkg.develop(path=joinpath(ENV["GITHUB_WORKSPACE"], "cairo-jll-artifact", "Cairo_jll"))
+            Pkg.instantiate()
+            Pkg.status()
+            Pkg.test()
+          '
+
+  test-plots-jl:
+    name: Test Plots.jl (GR backend)
+    needs: build-cairo-jll
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PLOTS_TEST_PACKAGES: "GR"
+    steps:
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+
+      - name: Download Cairo_jll artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cairo-jll-local
+          path: cairo-jll-artifact
+
+      - name: Fix artifact paths
+        run: |
+          PRODUCTS_PATH="${GITHUB_WORKSPACE}/cairo-jll-artifact/products"
+          sed -i "s|file://[^ \"]*products|file://${PRODUCTS_PATH}|g" \
+            cairo-jll-artifact/Cairo_jll/Artifacts.toml
+          cat cairo-jll-artifact/Cairo_jll/Artifacts.toml
+
+      - name: Clone Plots.jl
+        uses: actions/checkout@v4
+        with:
+          repository: JuliaPlots/Plots.jl
+          ref: v2
+          path: Plots.jl
+
+      - name: Run Plots tests (GR backend only)
+        run: |
+          cd Plots.jl/Plots
+          julia --color=yes --project=. -e '
+            using Pkg
+            Pkg.develop(path=joinpath(ENV["GITHUB_WORKSPACE"], "cairo-jll-artifact", "Cairo_jll"))
+            Pkg.instantiate()
+            Pkg.status()
+            Pkg.test()
+          '
